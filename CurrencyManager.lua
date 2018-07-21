@@ -33,70 +33,98 @@ You can read the full license at: https://creativecommons.org/licenses/by-nc-sa/
 local CurrencyManager = {
 	Title = "Currency manager",
 	Author = "Onigar & Ek1",
-	Description = "When accessing a bank the currencies betwean the character and the bank are managed per add-on's setup.",
-	Version = "18.07.14",
-	--SavedVarsVersion = 1,
+	Description = "When accessing a bank the currencies betwean the character and the bank are managed per add-on's settings.",
+	Version = "18.07.21",
+	SavedVarsVersion = 21,
 	License = "CC BY-NC-SA: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International",
-	git = "vbn",
-	www = "http://www.esoui.com/downloads/info1998-CurrencyManager.html#info"
+	git = "https://github.com/Ek1/CurrencyManager",
+	www = "http://www.esoui.com/downloads/info1998-CurrencyManager"
 }
 -- set to CurrencyManager.Title for first use by Initialize()
-local name = CurrencyManager.Title
 local characterVar = {}
 local charSettings = {}
+local bankerRepresentsHowManyCharacters = {}
 
 -- Default Setting is to take no action allowing the User to define Currency Transfer Rules
 local defaultCharacterVariables = {
-		accountWide 					= false,
-		goldManagementType				= GetString(CM_CHAR_VAR_NONE),
-		goldFixedAmount					= 5000,
-		telVarStonesManagementType		= GetString(CM_CHAR_VAR_NONE),
-		telVarStonesFixedAmount			= 100,
-		alliancePointsManagementType	= GetString(CM_CHAR_VAR_NONE),
-		alliancePointsFixedAmount		= 5000,
-		writVouchersManagementType		= GetString(CM_CHAR_VAR_NONE),
-		writVouchersFixedAmount			= 0,
+	accountWide 			= false,
+	manageGold				= false,
+	manageGoldOption		= "Shares",
+	goldFixedAmount			= 10000,
+	goldPercentage			= 50,
+	goldShares				= GetNumCharacters(),
+	manageTelVar			= false,
+	telVarFixed				= 100,
+	manageAlliancePoints	= false,
+	alliancePointsFixed		= 0,
+	manageWritVouchers		= false,
+	writVouchersFixed		= 0
 }
-
 
 local function TransferGold()
 
-	--	Initialize variable for transfer amount.
-	local transferAmount = 0
-	--	Get amount character has in bag
-	local goldBag = GetCurrentMoney()
-	--	Get amount in bank
-	local goldBank = GetBankedMoney()
-	
-	
-	--	Get transfer amount based on management type
-	if characterVar.goldManagementType == GetString(CM_CHAR_VAR_FIXED) then				--	Fixed management:
-		transferAmount = goldBag - characterVar.goldFixedAmount
-	elseif characterVar.goldManagementType == GetString(CM_CHAR_VAR_EMPTY) then			--	Empty management:
-		transferAmount = goldBag
-	else																				--	None, no management:
-		transferAmount = 0
-	end
+	-- Fixed management:
+	if characterVar.manageGoldOption == "Fixed" then
 
-	--	Using the transfer amount value(+/-) request a deposit or a withdrawal
-	if transferAmount < 0 then
-		transferAmount = math.abs(transferAmount)
-		if transferAmount > goldBank then
-			d(GetString(CM_PREFIX_ONLY) .. goldBank .. GetString(CM_POSTFIX_GOLD_AVAILABLE))
-			transferAmount = goldBank
+	-- Initialize variable for transfer amount.
+		local transferAmount = GetCurrentMoney() - characterVar.goldFixedAmount
+
+	-- Using the transfer amount value(+/-) request a deposit or a withdrawal
+		if transferAmount < 0 then
+			transferAmount = math.abs(transferAmount)
+			WithdrawCurrencyFromBank(CURT_MONEY, transferAmount)
+			d(CurrencyManager.Title .. ": " .. GetString(CM_PREFIX_WITHDREW) .. transferAmount  .. GetString(CM_POSTFIX_GOLD))
+		elseif 0 < transferAmount then
+			DepositCurrencyIntoBank(CURT_MONEY, transferAmount)
+			d(CurrencyManager.Title .. ": " .. GetString(CM_PREFIX_DEPOSITED)  .. transferAmount  .. GetString(CM_POSTFIX_GOLD))
 		end
-		WithdrawCurrencyFromBank(CURT_MONEY, transferAmount)
-		if transferAmount > 0 then
-			d(GetString(CM_PREFIX_WITHDREW) .. transferAmount .. GetString(CM_POSTFIX_GOLD))
+	end
+	
+	-- Percentage management
+	if characterVar.manageGoldOption == "Percentage" then
+
+		local total = GetBankedMoney() + GetCurrentMoney()
+		local cashToBe = math.floor (total * (characterVar.goldPercentage/100) )
+
+		--	Too little cash, withdrawing some.
+		if GetCurrentMoney() < cashToBe then
+			local transferAmount = cashToBe - GetCurrentMoney()
+			WithdrawCurrencyFromBank(CURT_MONEY, transferAmount)
+			d(CurrencyManager.Title .. ": " .. GetString(CM_PREFIX_WITHDREW) .. transferAmount .. GetString(CM_POSTFIX_GOLD))
+		elseif cashToBe < GetCurrentMoney() then
+			-- Too much cash, depositing some to bank.
+			local transferAmount = GetCurrentMoney() - cashToBe
+			DepositCurrencyIntoBank(CURT_MONEY, transferAmount)
+			d(CurrencyManager.Title .. ": " .. GetString(CM_PREFIX_DEPOSITED)  .. transferAmount  .. GetString(CM_POSTFIX_GOLD))
 		end
-	else
-		DepositCurrencyIntoBank(CURT_MONEY, transferAmount)
-		if transferAmount > 0 then
-			d(GetString(CM_PREFIX_DEPOSITED) .. transferAmount .. GetString(CM_POSTFIX_GOLD))
+	end
+	
+	-- Shares management
+	if characterVar.manageGoldOption == "Shares" then
+		local totalGold = GetBankedMoney() + GetCurrentMoney()
+		-- Variable that represents how big deal the banker is holding
+		local everyoneElsesShareOnBanker = 0
+		-- Maybe only one charter
+		if GetNumCharacters() == 1 then
+			everyoneElsesShareOnBanker = math.floor (1/2 * totalGold)
+		else
+		-- Maybe this character gets reduced or increased shares.
+			everyoneElsesShareOnBanker = math.floor ((characterVar.goldShares / GetNumCharacters() ) * totalGold )
+		end
+		if GetBankedMoney() < everyoneElsesShareOnBanker then
+			-- Carrying too much cash, counting how much should be deposited to bank 
+			transferAmount = everyoneElsesShareOnBanker - GetBankedMoney()
+			DepositCurrencyIntoBank(CURT_MONEY, transferAmount)
+			d(CurrencyManager.Title .. ": " .. GetString(CM_PREFIX_DEPOSITED) .. transferAmount  .. GetString(CM_POSTFIX_GOLD))
+		-- Using double if instead of if-else as then we can forget fractions
+		elseif  everyoneElsesShareOnBanker < GetBankedMoney() then
+			-- Carrying too little cash, counting how much should be withdrawing from bank
+			transferAmount = GetBankedMoney() - everyoneElsesShareOnBanker
+			WithdrawCurrencyFromBank(CURT_MONEY, transferAmount)
+			d(CurrencyManager.Title .. ": " .. GetString(CM_PREFIX_WITHDREW).. transferAmount .. GetString(CM_POSTFIX_GOLD))
 		end
 	end
 end
-
 
 local function TransferTelVarStones()
 
@@ -109,7 +137,7 @@ local function TransferTelVarStones()
 
 	--	Get transfer amount based on management type
 	if characterVar.telVarStonesManagementType == GetString(CM_CHAR_VAR_FIXED) then		--	Fixed management:
-		transferAmount = bagTelVarStones - characterVar.telVarStonesFixedAmount
+		transferAmount = bagTelVarStones - characterVar.telVarFixed
 	elseif characterVar.telVarStonesManagementType == GetString(CM_CHAR_VAR_EMPTY) then	--	Empty management:
 		transferAmount = bagTelVarStones
 	else																				--	None, no management:
@@ -130,11 +158,10 @@ local function TransferTelVarStones()
 	else
 		DepositCurrencyIntoBank(CURT_TELVAR_STONES, transferAmount)
 		if transferAmount > 0 then
-			d(GetString(CM_PREFIX_DEPOSITED) .. transferAmount .. GetString(CM_POSTFIX_TEL_VAR))
+			d(GetString(CM_PREFIX_DEPOSITEDED) .. transferAmount .. GetString(CM_POSTFIX_TEL_VAR))
 		end
 	end
 end
-
 
 local function TransferAlliancePoints()
 
@@ -147,7 +174,7 @@ local function TransferAlliancePoints()
 
 	--	Get transfer amount based on management type
 	if characterVar.alliancePointsManagementType == GetString(CM_CHAR_VAR_FIXED) then	--	Fixed management:
-		transferAmount = alliancePointsBag - characterVar.alliancePointsFixedAmount
+		transferAmount = alliancePointsBag - characterVar.alliancePointsFixed
 	elseif characterVar.alliancePointsManagementType == GetString(CM_CHAR_VAR_EMPTY) then	--	Empty management:
 		transferAmount = alliancePointsBag
 	else																				--	None, no management:
@@ -168,11 +195,10 @@ local function TransferAlliancePoints()
 	else
 		DepositCurrencyIntoBank(CURT_ALLIANCE_POINTS, transferAmount)
 		if transferAmount > 0 then
-			d(GetString(CM_PREFIX_DEPOSITED) .. transferAmount .. GetString(CM_POSTFIX_AP))
+			d(GetString(CM_PREFIX_DEPOSITEDED) .. transferAmount .. GetString(CM_POSTFIX_AP))
 		end
 	end
 end
-
 
 local function TransferWritVouchers()
 
@@ -185,7 +211,7 @@ local function TransferWritVouchers()
 
 	--	Get transfer amount based on management type
 	if characterVar.writVouchersManagementType == GetString(CM_CHAR_VAR_FIXED) then		--	Fixed management:
-		transferAmount = writVouchersBag - characterVar.writVouchersFixedAmount
+		transferAmount = writVouchersBag - characterVar.writVouchersFixed
 	elseif characterVar.writVouchersManagementType == GetString(CM_CHAR_VAR_EMPTY) then	--	Empty management:
 		transferAmount = writVouchersBag
 	else																				--	None, no management:
@@ -206,11 +232,10 @@ local function TransferWritVouchers()
 	else
 		DepositCurrencyIntoBank(CURT_WRIT_VOUCHERS, transferAmount)
 		if transferAmount > 0 then
-			d(GetString(CM_PREFIX_DEPOSITED) .. transferAmount .. GetString(CM_POSTFIX_WRIT_VOUCHERS))
+			d(GetString(CM_PREFIX_DEPOSITEDED) .. transferAmount .. GetString(CM_POSTFIX_WRIT_VOUCHERS))
 		end
 	end
 end
-
 
 local function CreateSettingsMenu()
 
@@ -219,9 +244,7 @@ local function CreateSettingsMenu()
 	local panelData = {
 		type = "panel",
 		-- name = the title you see in the list of addons when displayed by "Settings, Addons" 
-		name = GetString(CM_ADDON_LONG_NAME),
-		-- displayName = the title at the top of the addon panel
-		displayName = "|c4a9300" .. GetString(CM_ADDON_LONG_NAME) .. "|r",
+		name = CurrencyManager.Title,
 		author = CurrencyManager.Author,
 		version = CurrencyManager.Version,
 		registerForRefresh = true,
@@ -231,19 +254,13 @@ local function CreateSettingsMenu()
 	LAM:RegisterAddonPanel("CurrencyManagerPanel", panelData)
 
 	local optionsData = {
-		
-		{
-            type = "description",
-			text = ZO_HIGHLIGHT_TEXT:Colorize(GetString(CM_ADDON_DESCRIPTION)),
-            width = "full"
-        },
-
-		-- Account Wide Settings
+	
 		-- divider
-        {	type = "divider", width = "full" },
-		{
+        {	type = "divider"},
+		
+		-- Account Wide Settings
+		{	name = "Account wide settings",
 			type = "checkbox",
-			name = GetString(CM_ACCOUNT_WIDE_TITLE),
 			tooltip = GetString(CM_ACCOUNT_WIDE_TIP),
 			default = defaultCharacterVariables.accountWide,
 			getFunc = 	function() 
@@ -254,168 +271,176 @@ local function CreateSettingsMenu()
 						end,
 			requiresReload = true,
 		},
-		
-		-- Gold Management
+
 		-- divider
-        {	type = "divider", width = "full" },
-		{
+        {	type = "divider"},
+	
+		-- Gold Management
+		{	name = "Manage |cffff24gold|r",
 			type = "dropdown",
-			name = "|cffff24" .. GetString(CM_PREFIX_GOLD_TITLE) .. "|r" .. GetString(CM_POSTFIX_MANAGEMENT_TYPE),
-			tooltip = GetString(CM_MANAGEMENT_TYPE_TIP),
-			default = defaultCharacterVariables.goldManagementType,
-			choices = {GetString(CM_CHAR_VAR_FIXED), GetString(CM_CHAR_VAR_EMPTY), GetString(CM_CHAR_VAR_NONE)},
-		 
+			tooltip = "Should the add-on handle gold and in what way",
+			width = "half",
+			default = defaultCharacterVariables.manageGold,
+			choices = {"No", "Fixed", "Percentage", "Shares"},
 			getFunc = 	function()
-							return characterVar.goldManagementType
+							if characterVar.manageGold then
+								return characterVar.manageGoldOption
+							else
+								characterVar.manageGoldOption = "No"
+								return characterVar.manageGoldOption
+							end
 						end,
 			setFunc = 	function(choice)
-							characterVar.goldManagementType = choice
+							characterVar.manageGoldOption = choice
+							if choice == "No" then
+								characterVar.manageGold = false
+							else
+								characterVar.manageGold = true
+							end
 						end,
 		},
-		{
+		{	name = "Gold kept in bag",
 			type = "editbox",
-			name = "|cffff24" .. GetString(CM_PREFIX_GOLD_TITLE) .. "|r" .. GetString(CM_POSTFIX_FIXED_AMOUNT),
+			width = "half",
 			tooltip = GetString(CM_GOLD_FIXED_AMOUNT_TIP),
 			default = defaultCharacterVariables.goldFixedAmount,
-			
 			getFunc = 	function() 
 							return characterVar.goldFixedAmount 
 						end,
 			setFunc = 	function(choice)
 							characterVar.goldFixedAmount = choice
 						end,
+			disabled = function() return not (characterVar.manageGoldOption == "Fixed") end
 		},
-		
-		-- Tel Var Stones Management
-		-- divider
-        {	type = "divider", width = "full" },
-		{
-			type = "dropdown",
-			name = "|c2492ff" .. GetString(CM_PREFIX_TEL_VAR_TITLE) .. "|r" .. GetString(CM_POSTFIX_MANAGEMENT_TYPE),
-			tooltip = GetString(CM_MANAGEMENT_TYPE_TIP),
-			default = defaultCharacterVariables.telVarStonesManagementType,
-			choices = {GetString(CM_CHAR_VAR_FIXED), GetString(CM_CHAR_VAR_EMPTY), GetString(CM_CHAR_VAR_NONE)},
-		 
+		{	name = "From total",
+			type = "slider",
+			width = "half",
+			tooltip = "What percentage is kept on charater of total gold",
+			default = defaultCharacterVariables.goldPercentage,
+			min = 1,
+			max = 100,
 			getFunc = 	function()
-							return characterVar.telVarStonesManagementType
+							return characterVar.goldPercentage 
 						end,
 			setFunc = 	function(choice)
-							characterVar.telVarStonesManagementType = choice
+							characterVar.goldPercentage = choice
 						end,
+			disabled = function() return not (characterVar.manageGoldOption == "Percentage") end
 		},
-		{
-			type = "editbox",
-			name = "|c2492ff" .. GetString(CM_PREFIX_TEL_VAR_TITLE) .. "|r" .. GetString(CM_POSTFIX_FIXED_AMOUNT),
-			tooltip = GetString(CM_TEL_VAR_FIXED_AMOUNT_TIP),
-			default = defaultCharacterVariables.telVarStonesFixedAmount,
-			
-			getFunc = 	function() 
-							return characterVar.telVarStonesFixedAmount 
+		{	name = "Banker represents",
+			type = "dropdown",
+			tooltip = "Bank is holding other characters cut of the pot but you can also increase the cut for this character by reducing how many characters the banker represents. " .. GetNumCharacters()-1 .. " means that banker has half of total money while " .. (GetNumCharacters()-1)/2 .. " 25% and " .. (GetNumCharacters()-1)*2 .. " 75%. If bank reprents one character then only " .. math.floor(1/(GetNumCharacters()-1)*100) .. "% of gold is kept in there.",
+			width = "half",
+			default = (GetNumCharacters()-1),
+			choices = {1, (GetNumCharacters()-1)/2, GetNumCharacters()-1, (GetNumCharacters()-1)*2},
+			getFunc = 	function()
+							return characterVar.goldShares
 						end,
 			setFunc = 	function(choice)
-							characterVar.telVarStonesFixedAmount = choice
+							characterVar.goldShares = choice
 						end,
+			disabled = function() return not (characterVar.manageGoldOption == "Shares") end
 		},
-		{
-            type = "description",
-            text = GetString(CM_TEL_VAR_MULTIPLIER_NOTE),
-            width = "full"
-        },
-		
+		-- divider
+        {	type = "divider"},
+		-- Tel Var stones management
+		{	name = "Manage |c2492ffTel Var|r stones",
+			type = "checkbox",
+			tooltip = GetString(CM_MANAGEMENT_TYPE_TIP),
+			default = defaultCharacterVariables.manageTelVar,
+			getFunc = function() 
+						return characterVar.manageTelVar 
+						end,
+			setFunc = function(value) 
+						characterVar.manageTelVar = value 
+						end,
+			width = "half"
+		},
+		{	name = "|c2492ffStones|r kept in bag",
+			type = "dropdown",
+			tooltip = "Ammount of |c2492ffTel Var|r stones kept in bag." .. GetString(CM_TEL_VAR_MULTIPLIER_NOTE),
+			default = defaultCharacterVariables.telVarFixed,
+			choices = {0,100,1000,10000},
+			getFunc = 	function()
+							return characterVar.telVarFixed
+						end,
+			setFunc = 	function(choice)
+							characterVar.telVarFixed = choice
+						end,
+			width = "half",
+			disabled = function() return not characterVar.manageTelVar end
+		},
+		-- divider
+        {	type = "divider"},
 		-- Alliance Points Management
-		-- divider
-        {	type = "divider", width = "full" },
-		{
-			type = "dropdown",
-			name = "|c24ff24" .. GetString(CM_AP_TITLE) .. "|r" .. GetString(CM_POSTFIX_MANAGEMENT_TYPE),
+		{	name = "Manage |c24ff24alliance|r points",
+			type = "checkbox",
 			tooltip = GetString(CM_MANAGEMENT_TYPE_TIP),
-			default = defaultCharacterVariables.alliancePointsManagementType,
-			choices = {GetString(CM_CHAR_VAR_FIXED), GetString(CM_CHAR_VAR_EMPTY), GetString(CM_CHAR_VAR_NONE)},
-		 
-			getFunc = 	function()
-							return characterVar.alliancePointsManagementType
+			default = defaultCharacterVariables.manageAlliancePoints,
+			getFunc = function() 
+						return characterVar.manageAlliancePoints 
 						end,
-			setFunc = 	function(choice)
-							characterVar.alliancePointsManagementType = choice
+			setFunc = function(value) 
+						characterVar.manageAlliancePoints = value 
 						end,
+			width = "half"
 		},
 		{
 			type = "editbox",
 			name = "|c24ff24" .. GetString(CM_AP_TITLE) .. "|r" .. GetString(CM_POSTFIX_FIXED_AMOUNT),
 			tooltip = GetString(CM_AP_FIXED_AMOUNT_TIP),
-			default = defaultCharacterVariables.alliancePointsFixedAmount,
-			
+			default = defaultCharacterVariables.alliancePointsFixed,
 			getFunc = 	function() 
-							return characterVar.alliancePointsFixedAmount 
+							return characterVar.alliancePointsFixed 
 						end,
 			setFunc = 	function(choice)
-							characterVar.alliancePointsFixedAmount = choice
+							characterVar.alliancePointsFixed = choice
 						end,
+			width = "half",
+			disabled = function() return not characterVar.manageAlliancePoints end
 		},
-		
+		-- divider
+        {	type = "divider"	},
 		-- Writ Voucher Management
-		-- divider
-        {	type = "divider", width = "full" },
-		{
-			type = "dropdown",
-			name = "|cffff90" .. GetString(CM_WRIT_VOUCHER_TITLE) .. "|r" .. GetString(CM_POSTFIX_MANAGEMENT_TYPE),
+		{	name = "Manage |cffff90writ vouchers|r",
+			type = "checkbox",
 			tooltip = GetString(CM_MANAGEMENT_TYPE_TIP),
-			default = defaultCharacterVariables.writVouchersManagementType,
-			choices = {GetString(CM_CHAR_VAR_FIXED), GetString(CM_CHAR_VAR_EMPTY), GetString(CM_CHAR_VAR_NONE)},
-		 
+			default = defaultCharacterVariables.manageWritVouchers,
 			getFunc = 	function()
-							return characterVar.writVouchersManagementType
+							return characterVar.manageWritVouchers
 						end,
 			setFunc = 	function(choice)
-							characterVar.writVouchersManagementType = choice
+							characterVar.manageWritVouchers = choice
 						end,
+			width = "half"
 		},
-		{
+		{	name = "|cffff90" .. GetString(CM_WRIT_VOUCHER_TITLE) .. "|r" .. GetString(CM_POSTFIX_FIXED_AMOUNT),
 			type = "editbox",
-			name = "|cffff90" .. GetString(CM_WRIT_VOUCHER_TITLE) .. "|r" .. GetString(CM_POSTFIX_FIXED_AMOUNT),
 			tooltip = GetString(CM_WRIT_FIXED_AMOUNT_TIP),
-			default = defaultCharacterVariables.writVouchersFixedAmount,
+			default = defaultCharacterVariables.writVouchersFixed,
 			
 			getFunc = 	function() 
-							return characterVar.writVouchersFixedAmount 
+							return characterVar.writVouchersFixed 
 						end,
 			setFunc = 	function(choice)
-							characterVar.writVouchersFixedAmount = choice
+							characterVar.writVouchersFixed = choice
 						end,
+			width = "half",
+			disabled = function() return not characterVar.manageWritVouchers end
 		},
-		-- divider
-        {	type = "divider", width = "full" },
-        {
-            type = "description",
-			text = ZO_HIGHLIGHT_TEXT:Colorize(GetString(CM_MANAGEMENT_TYPE_OPTIONS)),
-            width = "full"
-        },
-		{
-            type = "description",
-            text = "|c5cb700" .. GetString(CM_CHAR_VAR_FIXED) .. "|r" .. GetString(CM_MAN_TYPE_FIXED_DESC),
-            width = "full"
-        },
-        {
-            type = "description",
-            text = "|c5cb700" .. GetString(CM_CHAR_VAR_EMPTY) .. "|r" .. GetString(CM_MAN_TYPE_EMPTY_DESC),
-            width = "full"
-        },
-		{
-            type = "description",
-            text = "|c5cb700" .. GetString(CM_CHAR_VAR_NONE) .. "|r" .. GetString(CM_MAN_TYPE_NONE_DESC),
-            width = "full"
-        },
-		-- divider
-        {	type = "divider", width = "full" },
 	}
 	LAM:RegisterOptionControls("CurrencyManagerPanel", optionsData)
 end
 
 local function OnBankOpen(event)
-	TransferGold()
-	TransferTelVarStones()
-	TransferAlliancePoints()
-	TransferWritVouchers()
+	if characterVar.manageGold then
+		TransferGold() end
+	if characterVar.manageTelVar then
+		TransferTelVarStones() end
+	if characterVar.manageAlliancePoints then
+		TransferAlliancePoints() end
+	if characterVar.manageWritVouchers then
+		TransferWritVouchers() end
 end
 
 local function getSettings()
@@ -426,37 +451,31 @@ local function getSettings()
 	end
 end
 
-local function Initialize()
-	--	Connect with Account Wide saved Variables
-	--  ZO_SavedVars:NewAccountWide(savedVariableTable, version, namespace, defaults, profile, displayName) 
-	charSettings.byAccount = ZO_SavedVars:NewAccountWide("CurrencyManagerSettings", 3, nil, defaultCharacterVariables)
-
-	--	Connect with Character Based saved Variables
-	--  ZO_SavedVars:NewCharacterNameSettings(savedVariableTable, version, namespace, defaults, profile)
-	--  ZO_SavedVars:NewCharacterIdSettings(savedVariableTable, version, namespace, defaults, profile)
-	--  Note: 
-	--  NewCharacterNameSettings saves readable char name in the addon saved var file
-	--  NewCharacterIdSettings saves a numeric id instead of the char name in the addon saved var file
-	charSettings.byChar = ZO_SavedVars:NewCharacterNameSettings("CurrencyManagerSettings", 3, nil, defaultCharacterVariables)
-
-	-- Use Character or Account Wide Settings
-	characterVar = getSettings()
-	
-	--	Generate Settings Menu
-	CreateSettingsMenu()
-
-	--	Register listener(s) for event(s)
-	EVENT_MANAGER:RegisterForEvent("CurrencyManagerBankOpen", EVENT_OPEN_BANK, OnBankOpen)
-
-	--	Cleanup:
-	--	After our event has loaded, do not need to listen for further calls.
-	EVENT_MANAGER:UnregisterForEvent(name, EVENT_ADD_ON_LOADED)
-
-end
-
 local function OnAddOnLoaded(event, addonLoading)
 	if addonLoading ~= CurrencyManager.Title then
-		Initialize()
+		--	Connect with Account Wide saved Variables
+		--  ZO_SavedVars:NewAccountWide(savedVariableTable, version, namespace, defaults, profile, displayName) 
+		charSettings.byAccount = ZO_SavedVars:NewAccountWide("CurrencyManagerSettings", 3, nil, defaultCharacterVariables)
+
+	--[[Connect with Character Based saved Variables
+		ZO_SavedVars:NewCharacterNameSettings(savedVariableTable, version, namespace, defaults, profile)
+		ZO_SavedVars:NewCharacterIdSettings(savedVariableTable, version, namespace, defaults, profile)
+		Note: 
+		NewCharacterNameSettings saves readable char name in the addon saved var file
+		NewCharacterIdSettings saves a numeric id instead of the char name in the addon saved var file]]
+		charSettings.byChar = ZO_SavedVars:NewCharacterNameSettings("CurrencyManagerSettings", 3, nil, defaultCharacterVariables)
+
+		-- Use Character or Account Wide Settings
+		characterVar = getSettings()
+		
+		--	Generate Settings Menu
+		CreateSettingsMenu()
+
+		--	Register listener(s) for event(s)
+		EVENT_MANAGER:RegisterForEvent("CurrencyManagerBankOpen", EVENT_OPEN_BANK, OnBankOpen)
+
+		--	After our event has loaded, do not need to listen for further calls.
+		EVENT_MANAGER:UnregisterForEvent(CurrencyManager.Title, EVENT_ADD_ON_LOADED)
 	end
 end
-EVENT_MANAGER:RegisterForEvent(name, EVENT_ADD_ON_LOADED, OnAddOnLoaded)
+EVENT_MANAGER:RegisterForEvent(CurrencyManager.Title, EVENT_ADD_ON_LOADED, OnAddOnLoaded)

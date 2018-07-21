@@ -1,5 +1,5 @@
 ﻿## Title: Currency manager
-## Author: Onigar
+## Author: Onigar & Ek1
 ## Version: 1.6.0
 ## Description: When accessing a bank the currencies betwean the character and the bank are managed per add-on's setup.
 ## APIVersion: 100023 100024
